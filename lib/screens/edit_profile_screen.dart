@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart'; // Importar Firebase Storage
 import 'dart:io';
+import '../services/auth_service.dart';
 
+/// Pantalla de Gestión de Perfil:
+/// Manejo la actualización de datos personales y la lógica de carga de avatares (binarios).
 class EditProfileScreen extends StatefulWidget {
   final String currentName;
   final String currentCareer;
@@ -24,6 +24,7 @@ class EditProfileScreen extends StatefulWidget {
 }
 
 class _EditProfileScreenState extends State<EditProfileScreen> {
+  final authService = AuthService();
   late TextEditingController nameController;
   late TextEditingController careerController;
   late TextEditingController dobController;
@@ -38,34 +39,33 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     dobController = TextEditingController(text: widget.currentDob);
   }
 
+  /// Gestión de Media: Captura de imagen desde galería con compresión del 50%.
   Future<void> _pickImage() async {
     final pickedFile = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 50);
     if (pickedFile != null) {
       setState(() => _image = File(pickedFile.path));
     }
   }
+
+  /// Workflow de Guardado: 
+  /// Orquesto la subida de la imagen (si existe) y la actualización de los documentos en Firestore.
   Future<void> _saveProfile() async {
     if (nameController.text.trim().isEmpty) return;
 
     setState(() => isLoading = true);
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      Map<String, dynamic> updateData = {
-        'fullName': nameController.text.trim(),
-        'career': careerController.text.trim(),
-        'dob': dobController.text.trim(),
-      };
-
+      String? newPhotoUrl;
       if (_image != null) {
-        // Subir la nueva imagen a Firebase Storage
-        final storageRef = FirebaseStorage.instance.ref().child('profile_images').child('${user!.uid}.jpg');
-        await storageRef.putFile(_image!);
-        final imageUrl = await storageRef.getDownloadURL();
-        updateData['photoUrl'] = imageUrl; // Guardar la URL pública
+        newPhotoUrl = await authService.uploadProfilePicture(_image!.path);
       }
-      await FirebaseFirestore.instance.collection('users').doc(user!.uid).update(updateData);
-      // Si el usuario actualizó su nombre, también actualizar el displayName de FirebaseAuth
-      await user.updateDisplayName(nameController.text.trim());
+
+      // Actualizamos los datos en Firestore a través del servicio
+      await authService.updateProfile(
+        name: nameController.text.trim(),
+        career: careerController.text.trim(),
+        dob: dobController.text.trim(),
+        photoUrl: newPhotoUrl,
+      );
 
       if (mounted) {
         Navigator.pop(context, true);
@@ -91,6 +91,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         padding: const EdgeInsets.all(25),
         child: Column(
           children: [
+            // Componente de avatar interactivo.
             GestureDetector(
               onTap: _pickImage,
               child: Stack(
@@ -98,6 +99,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   CircleAvatar(
                     radius: 60,
                     backgroundColor: Colors.grey[200],
+                    // Lógica de visualización jerárquica: Imagen local nueva > Imagen remota > Icono default.
                     backgroundImage: _image != null
                         ? FileImage(_image!) // Si hay una nueva imagen seleccionada localmente
                         : (widget.currentPhotoUrl != null && widget.currentPhotoUrl!.startsWith('http')

@@ -6,24 +6,95 @@ import 'chat_screen.dart'; //
 
 class ProductDetailCloud extends StatelessWidget {
   final Map<String, dynamic> productData;
-  const ProductDetailCloud({super.key, required this.productData});
+  final String productId;
+  final bool isDarkMode;
+  final String userRole;
+
+  const ProductDetailCloud({
+    super.key, 
+    required this.productData, 
+    required this.productId,
+    this.isDarkMode = false,
+    this.userRole = 'usuario',
+  });
+
+  void _showReportDialog(BuildContext context) {
+    final reasonController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text("Reportar Producto", style: TextStyle(color: Color(0xFFAF0303), fontWeight: FontWeight.bold)),
+        content: TextField(
+          controller: reasonController,
+          maxLines: 3,
+          decoration: InputDecoration(
+            hintText: "¿Por qué reportas este producto?",
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCELAR")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFAF0303), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+            onPressed: () async {
+              if (reasonController.text.trim().isEmpty) return;
+              await FirebaseFirestore.instance.collection('reports').add({
+                'productId': productId,
+                'productTitle': productData['title'],
+                'sellerId': productData['sellerId'],
+                'reporterId': FirebaseAuth.instance.currentUser?.uid,
+                'reason': reasonController.text.trim(),
+                'timestamp': FieldValue.serverTimestamp(),
+                'status': 'pending',
+              });
+              if (context.mounted) {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Reporte enviado al equipo de moderación"), backgroundColor: Colors.orange));
+              }
+            },
+            child: const Text("ENVIAR REPORTE", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    bool isDarkMode = Theme.of(context).brightness == Brightness.dark;
-    Color cloudColor = isDarkMode ? const Color(0xFF1E1E1E) : Colors.white;
-    return Container(
-      padding: const EdgeInsets.only(top: 10, left: 20, right: 20, bottom: 20),
-      decoration: BoxDecoration(
-        color: cloudColor,
-        borderRadius: const BorderRadius.only(topLeft: Radius.circular(30), topRight: Radius.circular(30)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min, 
+    bool isPending = productData['status'] == 'pending';
+    bool isBlocked = productData['status'] == 'blocked';
+    final Color textColor = isDarkMode ? Colors.white : Colors.black87;
+    final Color subTextColor = isDarkMode ? Colors.white70 : Colors.grey;
+
+    return Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Center(
-            child: Container(width: 50, height: 5, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(10))),
-          ),
+          if (isPending) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.hourglass_empty, size: 16, color: Colors.orange), SizedBox(width: 8), Text("ESTE PRODUCTO ESTÁ EN REVISIÓN", style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, fontSize: 12))]),
+            ),
+          ],
+          if (isBlocked) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.red.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.block, size: 16, color: Colors.red), SizedBox(width: 8), Text("PUBLICACIÓN BLOQUEADA POR EL ADMIN", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 12))]),
+            ),
+          ],
           const SizedBox(height: 20),
           ClipRRect(
             borderRadius: BorderRadius.circular(20),
@@ -32,7 +103,18 @@ class ProductDetailCloud extends StatelessWidget {
                 : Container(height: 200, width: double.infinity, color: Colors.grey.shade300, child: const Icon(Icons.image_not_supported, color: Colors.grey)), // Fallback si no hay imagen
           ),
           const SizedBox(height: 20),
-          Text(productData['title'] ?? 'Sin título', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(child: Text(productData['title'] ?? 'Sin título', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: textColor))),
+              if (userRole == 'usuario' && productData['sellerId'] != FirebaseAuth.instance.currentUser?.uid)
+                IconButton(
+                  icon: const Icon(Icons.report_gmailerrorred_rounded, color: Colors.orange),
+                  onPressed: () => _showReportDialog(context),
+                  tooltip: "Reportar publicación",
+                ),
+            ],
+          ),
           const SizedBox(height: 10),
           Text('\$${productData['price'] ?? '0'}', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Color(0xFFAF0303))),
           const SizedBox(height: 10),
@@ -40,19 +122,19 @@ class ProductDetailCloud extends StatelessWidget {
             children: [
               const Icon(Icons.school, size: 16, color: Colors.grey),
               const SizedBox(width: 5),
-              Text(productData['universitySede'] ?? 'Sede Principal', style: const TextStyle(color: Colors.grey, fontSize: 14)),
+              Text(productData['universitySede'] ?? 'Sede Principal', style: TextStyle(color: subTextColor, fontSize: 14)),
               const SizedBox(width: 15),
               const Icon(Icons.near_me, size: 16, color: Colors.grey),
               const SizedBox(width: 5),
-              Text(productData['detectedCity'] ?? '', style: const TextStyle(color: Colors.grey, fontSize: 14)),
+              Text(productData['detectedCity'] ?? '', style: TextStyle(color: subTextColor, fontSize: 14)),
             ],
           ),
           const SizedBox(height: 20),
-          Text(productData['description'] ?? 'Sin descripción adicional.', style: const TextStyle(fontSize: 15, color: Colors.grey)),
+          Text(productData['description'] ?? 'Sin descripción adicional.', style: TextStyle(fontSize: 15, color: subTextColor)),
           const SizedBox(height: 25),
           const Divider(),
 
-          const Text("Contactar al Vendedor", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          Text("Contactar al Vendedor", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: textColor)),
           const SizedBox(height: 15),
           Row(
             children: [
@@ -65,8 +147,8 @@ class ProductDetailCloud extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(productData['sellerEmail'] ?? 'Usuario UA', style: const TextStyle(fontWeight: FontWeight.w600)),
-                    const Text("Vendedor UA verificado", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                    Text(productData['sellerEmail'] ?? 'Usuario UA', style: TextStyle(fontWeight: FontWeight.w600, color: textColor)),
+                    Text("Vendedor UA verificado", style: TextStyle(color: subTextColor, fontSize: 12)),
                   ],
                 ),
               ),
@@ -90,12 +172,22 @@ class ProductDetailCloud extends StatelessWidget {
                   await FirebaseFirestore.instance.collection('chats').doc(chatRoomId).set({
                     'participants': [currentUser.uid, sellerId],
                     'users': { currentUser.uid: {'name': currentUserName}, sellerId: {'name': sellerName} },
+                    'productId': productId,
+                    'productTitle': productData['title'],
+                    'productImageUrl': productData['imageUrl'],
                     'lastMessageTime': FieldValue.serverTimestamp(),
                   }, SetOptions(merge: true));
                   
                   if (context.mounted) {
                     Navigator.pop(context);
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => ChatScreen(chatId: chatRoomId, otherUserId: sellerId, otherUserName: sellerName)));
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => ChatScreen(
+                      chatId: chatRoomId, 
+                      otherUserId: sellerId, 
+                      otherUserName: sellerName,
+                      productId: productId,
+                      productTitle: productData['title'],
+                      productImageUrl: productData['imageUrl'],
+                    )));
                   }
                 },
               ),
@@ -103,7 +195,6 @@ class ProductDetailCloud extends StatelessWidget {
           ),
           const SizedBox(height: 20),
         ],
-      ),
     );
   }
 }

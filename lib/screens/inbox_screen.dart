@@ -3,6 +3,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'chat_screen.dart';
 
+/// Bandeja de Entrada (Inbox):
+/// Centralizo la visualización de todos los hilos de conversación en los que 
+/// participa el usuario actual (usando el operador 'arrayContains' en Firestore).
 class InboxScreen extends StatefulWidget {
   const InboxScreen({super.key});
 
@@ -30,6 +33,7 @@ class _InboxScreenState extends State<InboxScreen> {
         ),
       ),
       body: StreamBuilder<QuerySnapshot>(
+        // Consulta reactiva filtrando por el UID del usuario en el array de participantes.
         stream: FirebaseFirestore.instance
             .collection('chats')
             .where('participants', arrayContains: currentUser!.uid)
@@ -40,7 +44,9 @@ class _InboxScreenState extends State<InboxScreen> {
           
           final chats = snapshot.data?.docs.toList() ?? [];
 
-          // Orden local para evitar error de índice compuesto en la consola de Firebase
+          /// Estrategia de Ordenamiento:
+          /// Realizo un sort local para evitar la necesidad de un índice compuesto complejo en Firestore
+          /// y para manejar de forma segura los timestamps nulos que ocurren durante la sincronización inicial.
           chats.sort((a, b) {
             final aData = a.data() as Map<String, dynamic>;
             final bData = b.data() as Map<String, dynamic>;
@@ -52,6 +58,7 @@ class _InboxScreenState extends State<InboxScreen> {
             return bTime.compareTo(aTime);
           });
 
+          // UI para estado de bandeja vacía.
           if (chats.isEmpty) {
             return Center(
               child: Column(
@@ -75,15 +82,19 @@ class _InboxScreenState extends State<InboxScreen> {
               final chatData = chats[index].data() as Map<String, dynamic>;
               final chatId = chats[index].id;
 
+              // Lógica de Negocio: Identificar al "otro" participante del chat.
               final participants = List<String>.from(chatData['participants'] ?? []);
               final otherUserId = participants.firstWhere((id) => id != currentUser!.uid, orElse: () => '');
               
-              // Extraemos el nombre guardado de la persona
+              // Extraigo metadata del interlocutor desde el mapa 'users' cacheado en el documento del chat.
               final usersMap = chatData['users'] as Map<String, dynamic>? ?? {};
               final otherUserData = usersMap[otherUserId] as Map<String, dynamic>? ?? {};
 
               final otherUserName = otherUserData['name'] ?? 'Usuario Desconocido';
               final lastMessage = chatData['lastMessage'] ?? '';
+              final String? chatProductId = chatData['productId'];
+              final String? chatProductTitle = chatData['productTitle'];
+              final String? chatProductImageUrl = chatData['productImageUrl'];
               
               return GestureDetector(
                 onTap: () {
@@ -93,7 +104,10 @@ class _InboxScreenState extends State<InboxScreen> {
                       builder: (_) => ChatScreen(
                         chatId: chatId, 
                         otherUserId: otherUserId, 
-                        otherUserName: otherUserName
+                        otherUserName: otherUserName,
+                        productId: chatProductId,
+                        productTitle: chatProductTitle,
+                        productImageUrl: chatProductImageUrl,
                       )
                     )
                   );
@@ -123,6 +137,16 @@ class _InboxScreenState extends State<InboxScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(otherUserName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.black87)),
+                            if (chatProductTitle != null && chatProductTitle.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4.0, bottom: 2.0),
+                                child: Text(
+                                  "Producto: $chatProductTitle",
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(color: Colors.blueGrey.shade400, fontSize: 12, fontStyle: FontStyle.italic),
+                                ),
+                              ),
                             const SizedBox(height: 6),
                             Text(lastMessage.isEmpty ? "Chat iniciado" : lastMessage, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
                           ],

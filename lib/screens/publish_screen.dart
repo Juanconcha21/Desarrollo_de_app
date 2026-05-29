@@ -2,8 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart'; // Importar Firebase Storage
+import 'package:geolocator/geolocator.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'dart:io';
 
+/// Pantalla de Publicación: 
+/// Implementa la lógica de ingesta de datos, geolocalización y carga de binarios (imágenes).
 class PublishScreen extends StatefulWidget {
   const PublishScreen({super.key});
 
@@ -17,16 +22,35 @@ class _PublishScreenState extends State<PublishScreen> {
   final priceController = TextEditingController();
   final descriptionController = TextEditingController();
 
-  String selectedSede = 'Sede Talca';
-  final List<String> sedes = ['Sede Talca', 'Sede Temuco', 'Sede Santiago'];
-
+  // Domain-specific data para el catálogo.
   String selectedCategory = 'Tecnología';
   final List<String> categories = ['Electrodomésticos', 'Tecnología', 'Muebles', 'Hogar', 'Ropa y Accesorios', 'Otros'];
 
+  LatLng? _pickedLocation;
   File? _image;
   final ImagePicker _picker = ImagePicker();
-  bool isLoading = false;
+  bool isLoading = false; // Flag para manejar el estado de carga del proceso asíncrono
 
+  /// Captura de coordenadas GPS:
+  /// Uso el paquete Geolocator para obtener la ubicación exacta del vendedor, mejorando el UX en el mapa.
+  Future<void> _getCurrentLocation() async {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) return;
+
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) return;
+    }
+
+    Position position = await Geolocator.getCurrentPosition();
+    setState(() {
+      _pickedLocation = LatLng(position.latitude, position.longitude);
+    });
+  }
+
+  /// Selector de imágenes:
+  /// Integro ImagePicker para obtener fotos de la galería con compresión de calidad (50%) para optimizar bandwidth.
   Future<void> _pickImage() async {
     final XFile? pickedFile = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 50);
     if (pickedFile != null) {
@@ -36,10 +60,33 @@ class _PublishScreenState extends State<PublishScreen> {
     }
   }
 
+  /// Workflow de Publicación:
+  /// 1. Validación de Formulario. 2. Upload de Imagen a Firebase Storage. 
+  /// 3. Inserción del documento en Firestore con la URL de descarga y metadata del vendedor.
   Future<void> _uploadProduct() async {
     if (!_formKey.currentState!.validate()) return;
+    if (_pickedLocation == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Por favor, activa tu ubicación para publicar"), backgroundColor: Colors.orange),
+      );
+      return;
+    }
     if (_image == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Por favor, selecciona una foto del producto")));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Row(
+            children: [
+              Icon(Icons.add_a_photo, color: Colors.white),
+              SizedBox(width: 12),
+              Text("Por favor, selecciona una foto del producto"),
+            ],
+          ),
+          backgroundColor: const Color(0xFFAF0303),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          margin: const EdgeInsets.all(20),
+        ),
+      );
       return;
     }
 
@@ -49,39 +96,74 @@ class _PublishScreenState extends State<PublishScreen> {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) throw "No hay sesión iniciada";
 
-      // Se ha eliminado la geolocalización y la subida de imagen a Firebase Storage.
-      // La imagen no será visible para otros usuarios.
+      // Fase 1: Persistencia de Binarios (Image Storage)
+      String? imageUrl;
+      if (_image != null) {
+        final storageRef = FirebaseStorage.instance.ref().child('product_images').child('${DateTime.now().millisecondsSinceEpoch}_${user.uid}.jpg');
+        final uploadTask = storageRef.putFile(_image!);
+        final snapshot = await uploadTask.whenComplete(() {});
+        imageUrl = await snapshot.ref.getDownloadURL();
+      }
       
       String sellerName = "Usuario";
+      // Obtener el nombre completo del vendedor
       DocumentSnapshot userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
       if (userDoc.exists) {
         final userData = userDoc.data() as Map<String, dynamic>;
         sellerName = userData['fullName'] ?? "Usuario";
       }
 
-      // Se crea el documento en Firestore con los datos del producto.
+      // Fase 2: Persistencia Documental (Firestore)
       await FirebaseFirestore.instance.collection('products').add({
         'title': nameController.text.trim(),
         'price': priceController.text.trim(),
         'description': descriptionController.text.trim(),
-        'universitySede': selectedSede,
         'category': selectedCategory,
-        // 'detectedCity' ha sido eliminado.
-        'imageUrl': '', // URL vacía porque la imagen es solo local.
+        'location': GeoPoint(_pickedLocation!.latitude, _pickedLocation!.longitude),
+        'imageUrl': imageUrl ?? '', // Guardar la URL de la imagen subida
         'sellerId': user.uid,
         'sellerEmail': user.email,
         'sellerName': sellerName, 
         
         'isSold': false, 
+        'status': 'pending', // Nuevo: Esperando aprobación del moderador
         'createdAt': FieldValue.serverTimestamp(),
       });
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("¡Producto publicado con éxito!"), backgroundColor: Colors.green));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Row(
+              children: [
+                Icon(Icons.rocket_launch, color: Colors.white),
+                SizedBox(width: 12),
+                Text("¡Producto enviado a revisión!"),
+              ],
+            ),
+            backgroundColor: Colors.green,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+            margin: const EdgeInsets.all(20),
+          ),
+        );
         Navigator.pop(context); 
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error al publicar: $e"), backgroundColor: Colors.red));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.error_outline, color: Colors.white),
+              const SizedBox(width: 12),
+              Expanded(child: Text("Error al publicar: $e")),
+            ],
+          ),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          margin: const EdgeInsets.all(20),
+        ),
+      );
     } finally {
       if (mounted) setState(() => isLoading = false);
     }
@@ -110,6 +192,7 @@ class _PublishScreenState extends State<PublishScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // ==========================================
+              // Componente visual para la captura de media.
               // 1. SELECTOR DE FOTO MEJORADO
               // ==========================================
               GestureDetector(
@@ -159,7 +242,7 @@ class _PublishScreenState extends State<PublishScreen> {
               const SizedBox(height: 35),
 
               // ==========================================
-              // 2. FORMULARIO CON DISEÑO MODERNO (SOMBRAS Y BORDES)
+              // Capa de captura de datos con validación en tiempo de ejecución.
               // ==========================================
               const Row(
                 children: [
@@ -184,11 +267,43 @@ class _PublishScreenState extends State<PublishScreen> {
               ),
               const SizedBox(height: 15),
 
-              _buildDropdown(
-                value: selectedSede,
-                icon: Icons.location_on_outlined,
-                items: sedes,
-                onChanged: (newValue) => setState(() => selectedSede = newValue!),
+              // Integración con Google Maps API para mostrar el punto de venta.
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(15),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 15)],
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.my_location, color: Color(0xFFAF0303)),
+                        const SizedBox(width: 10),
+                        const Text("Ubicación de venta", style: TextStyle(fontWeight: FontWeight.bold)),
+                        const Spacer(),
+                        TextButton(onPressed: _getCurrentLocation, child: const Text("Obtener")),
+                      ],
+                    ),
+                    if (_pickedLocation != null)
+                      SizedBox(
+                        height: 150,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(15),
+                          child: GoogleMap(
+                            initialCameraPosition: CameraPosition(target: _pickedLocation!, zoom: 15),
+                            markers: {Marker(markerId: const MarkerId("selected"), position: _pickedLocation!)},
+                            zoomControlsEnabled: false,
+                            myLocationButtonEnabled: false,
+                          ),
+                        ),
+                      )
+                    else
+                      const Text("Selecciona tu ubicación actual para que te encuentren", style: TextStyle(fontSize: 12, color: Colors.grey)),
+                  ],
+                ),
               ),
               const SizedBox(height: 15),
 
@@ -217,7 +332,7 @@ class _PublishScreenState extends State<PublishScreen> {
               const SizedBox(height: 40),
 
               // ==========================================
-              // 3. BOTÓN PUBLICAR POTENCIADO
+              // 3. BOTÓN PUBLICAR 
               // ==========================================
               Container(
                 width: double.infinity,

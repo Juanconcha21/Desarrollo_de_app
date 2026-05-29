@@ -1,34 +1,52 @@
 import 'package:flutter/material.dart';
+import 'dart:ui';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'dart:io';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../services/auth_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'edit_profile_screen.dart';
 import 'publish_screen.dart';
 import 'product_detail_cloud.dart';
 import 'my_products_screen.dart';
-import 'inbox_screen.dart'; //
-import 'login_screen.dart';
+import 'inbox_screen.dart';
+import 'pending_products_screen.dart';
+import 'reports_screen.dart';
+import 'admin_dashboard_screen.dart';
+import 'user_management_screen.dart';
+import 'app_config_screen.dart';
+import 'action_logs_screen.dart';
+import 'announcement_manager_screen.dart';
+import 'package:market1/screens/login_screen.dart';
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
+
+/// Esta es la pantalla principal de la aplicación.
+/// Aquí gestiono el estado global de la sesión, la navegación mediante un IndexedStack para optimizar
+/// el renderizado y la hidratación de datos del perfil del usuario.
 class _HomeScreenState extends State<HomeScreen> {
   final auth = AuthService();
   final user = FirebaseAuth.instance.currentUser;
-  int _selectedIndex = 1;
+  
+  // Índice para controlar el BottomNavigationBar. Empiezo en 1 (Para ti) como vista central.
+  int _selectedIndex = 1; 
   bool isDarkMode = false;
   String userName = "Cargando...";
   String userCareer = "Cargando...";
   String userDob = "Cargando...";
+  String userRole = "Cargando..."; 
+  String accountStatus = "Cargando...";
   String? profileImageUrl;
-  String? selectedFilterCategory;
+  String? selectedFilterCategory; // Estado para el filtrado reactivo de productos
+
   @override
   void initState() {
     super.initState();
     _loadUserData();
+    auth.saveDeviceToken(); // Asegura que las notificaciones lleguen a este dispositivo
     _loadThemePreference();
   }
 
@@ -40,6 +58,9 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     }
   }
+
+  /// Hidratación del estado local desde Firestore.
+  /// Recupero el documento del usuario para manejar el RBAC (Role Based Access Control).
   Future<void> _loadUserData() async {
     if (user != null) {
       try {
@@ -53,15 +74,113 @@ class _HomeScreenState extends State<HomeScreen> {
             userName = data['fullName'] ?? 'Usuario';
             userCareer = data['career'] ?? 'No especificada';
             userDob = data['dob'] ?? 'No especificada';
+            userRole = data['role'] ?? 'No especificado'; // Cargar rol
+            accountStatus = data['accountStatus'] ?? 'No especificado'; // Cargar estado
             profileImageUrl = data['photoUrl'] != null && data['photoUrl'].isNotEmpty
                 ? data['photoUrl']
                 : null;
+
+            // Auto-promoción: Si es el correo maestro, asegurar que sea admin en Firestore
+            if (user?.email == 'marketuafire@gmail.com' && userRole != 'admin') {
+              FirebaseFirestore.instance.collection('users').doc(user!.uid).update({'role': 'admin'});
+              userRole = 'admin';
+            }
           });
         }
       } catch (e) {
         print("Error cargando perfil: $e");
       }
     }
+  }
+
+  /// Módulo de Moderación: Implemento este diálogo para que los usuarios envíen 
+  /// reportes a la colección 'reports' en Firestore, permitiendo auditoría posterior.
+  void _showReportDialog(String productId, Map<String, dynamic> productData) {
+    final TextEditingController reportController = TextEditingController();
+    String selectedReason = 'Contenido inapropiado';
+    final List<String> reasons = [
+      'Contenido inapropiado',
+      'Fraude o Estafa',
+      'Producto prohibido',
+      'Spam',
+      'Otros'
+    ];
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setStateDialog) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Row(
+            children: [
+              Icon(Icons.report_problem_rounded, color: Color(0xFFAF0303)),
+              SizedBox(width: 10),
+              Text("Reportar Producto", style: TextStyle(fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text("¿Por qué deseas reportar esta publicación?", style: TextStyle(fontSize: 14)),
+              const SizedBox(height: 15),
+              DropdownButtonFormField<String>(
+                value: selectedReason,
+                items: reasons.map((r) => DropdownMenuItem(value: r, child: Text(r))).toList(),
+                onChanged: (val) => setStateDialog(() => selectedReason = val!),
+                decoration: InputDecoration(
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 15),
+                ),
+              ),
+              const SizedBox(height: 15),
+              TextField(
+                controller: reportController,
+                maxLines: 3,
+                decoration: InputDecoration(
+                  hintText: "Detalles adicionales (opcional)",
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCELAR", style: TextStyle(color: Colors.grey))),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFAF0303),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: () async {
+                await FirebaseFirestore.instance.collection('reports').add({
+                  'productId': productId,
+                  'productTitle': productData['title'],
+                  'sellerId': productData['sellerId'],
+                  'reporterId': user!.uid,
+                  'reporterEmail': user!.email,
+                  'reason': selectedReason,
+                  'details': reportController.text.trim(),
+                  'timestamp': FieldValue.serverTimestamp(),
+                  'status': 'pending',
+                });
+                if (context.mounted) {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: const Text("Reporte enviado. Gracias por ayudar a la comunidad."),
+                      backgroundColor: Colors.orange[800],
+                      behavior: SnackBarBehavior.floating,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                      margin: const EdgeInsets.all(20),
+                    ),
+                  );
+                }
+              },
+              child: const Text("ENVIAR", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _signOut() async {
@@ -75,12 +194,16 @@ class _HomeScreenState extends State<HomeScreen> {
     final textColor = isDarkMode ? Colors.white : Colors.black87;
     final mutedTextColor = isDarkMode ? Colors.white54 : Colors.grey;
 
+    final currentUser = FirebaseAuth.instance.currentUser;
+    // Defino las vistas principales del sistema.
     final List<Widget> screens = [
       _buildCategoriesTab(surfaceColor, textColor),
       _buildForYouTab(surfaceColor, textColor, mutedTextColor),
       _buildProfileTab(surfaceColor, textColor, mutedTextColor),
     ];
 
+    // El Scaffold principal implementa el patrón de navegación Bottom Navigation.
+    // Uso IndexedStack para que al cambiar de pestaña no se pierda el estado ni el scroll de los módulos.
     return Scaffold(
       backgroundColor: bgColor,
       body: IndexedStack(index: _selectedIndex, children: screens),
@@ -179,9 +302,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-
-  /// 1. PESTAÑA: CATEGORÍAS 
-
+  /// Módulo de Categorías: Estructura de navegación basada en cuadrícula (GridView).
   Widget _buildCategoriesTab(Color surfaceColor, Color textColor) {
     final List<Map<String, dynamic>> gridCategories = [
       {
@@ -287,15 +408,29 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-
-  /// 2. PESTAÑA: PARA TI 
-
+  /// Feed Principal (Para Ti): 
+  /// Implemento una arquitectura orientada a eventos mediante StreamBuilder que escucha 
+  /// en tiempo real la colección 'products' de Firestore.
   Widget _buildForYouTab(
     Color surfaceColor,
     Color textColor,
     Color mutedTextColor,
   ) {
+    if (userRole == "Cargando...") {
+      return const Center(child: CircularProgressIndicator(color: Color(0xFFAF0303)));
+    }
+
     Query productsQuery = FirebaseFirestore.instance.collection('products');
+
+    // Ocultar productos marcados como vendidos en el Home
+    productsQuery = productsQuery.where('isSold', isEqualTo: false);
+
+    // Lógica de Filtrado y RBAC:
+    // Los usuarios normales solo ven 'approved', los moderadores/admin ven todo el flujo.
+    bool isStaff = userRole == 'admin' || userRole == 'moderador';
+    if (!isStaff) {
+      productsQuery = productsQuery.where('status', isEqualTo: 'approved');
+    }
 
     if (selectedFilterCategory != null) {
       productsQuery = productsQuery.where(
@@ -457,10 +592,55 @@ class _HomeScreenState extends State<HomeScreen> {
 
         const SizedBox(height: 10),
 
+        // Banner de Anuncios: Implementado como un Single Source of Truth desde Firestore.
+        // Esto me permite cambiar avisos a toda la universidad sin actualizar la App.
+        StreamBuilder<DocumentSnapshot>(
+          stream: FirebaseFirestore.instance.collection('settings').doc('announcement').snapshots(),
+          builder: (context, snapshot) {
+            if (!snapshot.hasData || !snapshot.data!.exists) return const SizedBox.shrink();
+            var data = snapshot.data!.data() as Map<String, dynamic>;
+            if (!(data['isActive'] ?? false)) return const SizedBox.shrink();
+            
+            return Container(
+              width: double.infinity,
+              margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              padding: const EdgeInsets.all(15),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(colors: [Color(0xFFAF0303), Color(0xFF8B0000)]),
+                borderRadius: BorderRadius.circular(15),
+                boxShadow: [BoxShadow(color: Colors.red.withOpacity(0.3), blurRadius: 10)],
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.campaign, color: Colors.white, size: 30),
+                  const SizedBox(width: 15),
+                  Expanded(
+                    child: Text(data['message'] ?? '', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+
         Expanded(
+          // Renderizado asíncrono de la lista de productos.
           child: StreamBuilder<QuerySnapshot>(
             stream: productsQuery.snapshots(),
             builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Text(
+                      "Error: ${snapshot.error}\n\nSi ves un link en la consola de VS Code, haz clic para crear el índice de Firestore.",
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.red, fontSize: 12),
+                    ),
+                  ),
+                );
+              }
+
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const Center(
                   child: CircularProgressIndicator(color: Color(0xFFAF0303)),
@@ -515,12 +695,123 @@ class _HomeScreenState extends State<HomeScreen> {
 
                   return GestureDetector(
                     onTap: () {
+                      // Implemento el detalle del producto en un ModalBottomSheet con efecto Blur (Frosted Glass).
                       showModalBottomSheet(
                         context: context,
                         isScrollControlled: true,
                         backgroundColor: Colors.transparent,
-                        builder: (context) =>
-                            ProductDetailCloud(productData: productData),
+                        builder: (context) => BackdropFilter(
+                          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                          child: DraggableScrollableSheet(
+                            initialChildSize: 0.8,
+                            minChildSize: 0.5,
+                            maxChildSize: 0.95,
+                            builder: (_, controller) => Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: isDarkMode ? const Color(0xFF1A1A1A) : Colors.white,
+                                  borderRadius: BorderRadius.circular(35),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.15),
+                                      blurRadius: 30,
+                                      offset: const Offset(0, -5),
+                                    )
+                                  ],
+                                ),
+                                child: Stack(
+                                  children: [
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(35),
+                                      child: SingleChildScrollView(
+                                        controller: controller,
+                                        physics: const BouncingScrollPhysics(),
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              const SizedBox(height: 35),
+                                              ProductDetailCloud(
+                                                productData: productData,
+                                                productId: products[index].id,
+                                                isDarkMode: isDarkMode,
+                                                userRole: userRole,
+                                              ),
+                                              const SizedBox(height: 40), 
+                                              if (productData['location'] != null) ...[
+                                                const Text("Ubicación del vendedor", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                                                const SizedBox(height: 10),
+                                                Container(
+                                                  height: 200,
+                                                  decoration: BoxDecoration(borderRadius: BorderRadius.circular(25), border: Border.all(color: Colors.grey.shade300)),
+                                                  child: ClipRRect(
+                                                    borderRadius: BorderRadius.circular(24),
+                                                    child: GoogleMap(
+                                                      initialCameraPosition: CameraPosition(
+                                                        target: LatLng(
+                                                          (productData['location'] as GeoPoint).latitude,
+                                                          (productData['location'] as GeoPoint).longitude,
+                                                        ),
+                                                        zoom: 15,
+                                                      ),
+                                                      markers: {
+                                                        Marker(
+                                                          markerId: const MarkerId("seller"),
+                                                          position: LatLng((productData['location'] as GeoPoint).latitude, (productData['location'] as GeoPoint).longitude),
+                                                          infoWindow: InfoWindow(title: "Vendedor: ${productData['sellerName']}"),
+                                                        ),
+                                                      },
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                              const SizedBox(height: 40),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  Positioned(
+                                    top: 25,
+                                    right: 25,
+                                    child: Container(
+                                      color: Colors.transparent,
+                                      child: IconButton(
+                                        icon: const Icon(Icons.flag_rounded, color: Color(0xFFAF0303), size: 24),
+                                        style: IconButton.styleFrom(
+                                          backgroundColor: isDarkMode ? Colors.white10 : Colors.black.withOpacity(0.05),
+                                        ),
+                                        tooltip: "Reportar",
+                                        onPressed: () {
+                                          Navigator.pop(context);
+                                          _showReportDialog(products[index].id, productData);
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                  Positioned(
+                                    top: 10,
+                                    left: 0,
+                                    right: 0,
+                                    child: Center(
+                                      child: Container(
+                                        width: 45,
+                                        height: 5,
+                                        decoration: BoxDecoration(
+                                          color: isDarkMode ? Colors.white24 : Colors.black12,
+                                          borderRadius: BorderRadius.circular(10),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        ),
                       );
                     },
                     child: _buildProductCard(
@@ -545,15 +836,17 @@ class _HomeScreenState extends State<HomeScreen> {
     Color textColor,
     Color mutedTextColor,
   ) {
+    // Componente atómico para el producto.
+    // Manejo la lógica visual de 'isSold' mediante decoraciones de texto y filtros de color.
     bool isSold = product['isSold'] ?? false;
 
     return Container(
       decoration: BoxDecoration(
         color: surfaceColor,
-        borderRadius: BorderRadius.circular(15),
+        borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(isDarkMode ? 0.3 : 0.05),
+            color: Colors.black.withOpacity(isDarkMode ? 0.4 : 0.05),
             blurRadius: 10,
             offset: const Offset(0, 5),
           ),
@@ -564,9 +857,7 @@ class _HomeScreenState extends State<HomeScreen> {
         children: [
           Expanded(
             child: ClipRRect(
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(15),
-              ),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
               child: product['imageUrl'] != null && product['imageUrl'].isNotEmpty
                   ? Stack(
                       fit: StackFit.expand,
@@ -601,7 +892,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -610,22 +901,37 @@ class _HomeScreenState extends State<HomeScreen> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontWeight: FontWeight.bold,
+                    fontWeight: FontWeight.w600,
                     color: isSold ? mutedTextColor : textColor,
-                    fontSize: 14,
+                    fontSize: 15,
+                    letterSpacing: -0.5,
                     decoration: isSold ? TextDecoration.lineThrough : null,
                   ),
                 ),
-                const SizedBox(height: 5),
-                Text(
-                  '\$${product['price'] ?? '0'}',
-                  style: TextStyle(
-                    color: isSold ? Colors.grey : const Color(0xFFAF0303),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Text(
+                      '\$${product['price'] ?? '0'}',
+                      style: TextStyle(
+                        color: isSold ? Colors.grey : const Color(0xFFAF0303),
+                        fontWeight: FontWeight.w800,
+                        fontSize: 17,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (!isSold)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFAF0303).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text("Nuevo", style: TextStyle(color: Color(0xFFAF0303), fontSize: 10, fontWeight: FontWeight.bold)),
+                      ),
+                  ],
                 ),
-                const SizedBox(height: 5),
+                const SizedBox(height: 8),
                 Row(
                   children: [
                     const Icon(Icons.near_me, size: 12, color: Colors.grey),
@@ -649,6 +955,9 @@ Widget _buildProfileTab(
     Color textColor,
     Color mutedTextColor,
   ) {
+    /// Módulo de Perfil y Configuración:
+    /// Aquí centralizo la lógica de gestión de cuenta y los accesos condicionales 
+    /// para la administración del sistema.
     return SafeArea(
       child: Column(
         children: [
@@ -662,7 +971,6 @@ Widget _buildProfileTab(
                 icon: Icon(Icons.edit_note, color: textColor, size: 32),
                 tooltip: "Editar Perfil",
                 onPressed: () async {
-                  // Esperamos a que el usuario termine de editar
                   bool? updated = await Navigator.push(
                     context,
                     MaterialPageRoute(
@@ -675,7 +983,6 @@ Widget _buildProfileTab(
                     ),
                   );
 
-                  // Si guardó los cambios, recargamos los datos del usuario
                   if (updated == true) {
                     _loadUserData();
                   }
@@ -715,6 +1022,14 @@ Widget _buildProfileTab(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               _infoChip(Icons.book, userCareer, textColor),
+              const SizedBox(width: 10),
+              _infoChip(Icons.badge, userRole, textColor),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
               const SizedBox(width: 10),
               _infoChip(Icons.cake, userDob, textColor),
             ],
@@ -757,6 +1072,86 @@ Widget _buildProfileTab(
                       );
                     },
                   ),
+
+                  if (userRole == 'moderador' || userRole == 'admin') ...[
+                    Padding(
+                      padding: const EdgeInsets.only(left: 15, top: 20, bottom: 10),
+                      child: Text("Gestión de Moderación", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange[800])),
+                    ),
+                    _profileOptionTile(
+                      icon: Icons.fact_check_outlined,
+                      title: 'Productos Pendientes',
+                      textColor: textColor,
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const PendingProductsScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                    _profileOptionTile(
+                      icon: Icons.report_problem_outlined,
+                      title: 'Revisar Reportes',
+                      textColor: textColor,
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const ReportsScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+
+                  if (userRole == 'admin' && user?.email == 'marketuafire@gmail.com') ...[
+                    Padding(
+                      padding: const EdgeInsets.only(left: 15, top: 20, bottom: 10),
+                      child: Text("Panel de Administrador", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red[900])),
+                    ),
+                    _profileOptionTile(
+                      icon: Icons.admin_panel_settings,
+                      title: 'Dashboard Global',
+                      textColor: textColor,
+                      onTap: () {
+                        Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminDashboardScreen()));
+                      },
+                    ),
+                    _profileOptionTile(
+                      icon: Icons.people_alt_outlined,
+                      title: 'Gestión de Usuarios (CRUD)',
+                      textColor: textColor,
+                      onTap: () {
+                        Navigator.push(context, MaterialPageRoute(builder: (_) => const UserManagementScreen()));
+                      },
+                    ),
+                    _profileOptionTile(
+                      icon: Icons.settings_applications_rounded,
+                      title: 'Gestor de Aplicación (Sedes/Categorías)',
+                      textColor: textColor,
+                      onTap: () {
+                        Navigator.push(context, MaterialPageRoute(builder: (_) => const AppConfigScreen()));
+                      },
+                    ),
+                    _profileOptionTile(
+                      icon: Icons.history_edu_rounded,
+                      title: 'Logs de Acciones',
+                      textColor: textColor,
+                      onTap: () {
+                        Navigator.push(context, MaterialPageRoute(builder: (_) => const ActionLogsScreen()));
+                      },
+                    ),
+                    _profileOptionTile(
+                      icon: Icons.notification_add_rounded,
+                      title: 'Sistema de Anuncios',
+                      textColor: textColor,
+                      onTap: () {
+                        Navigator.push(context, MaterialPageRoute(builder: (_) => const AnnouncementManagerScreen()));
+                      },
+                    ),
+                  ],
 
                   Padding(
                     padding: const EdgeInsets.only(
@@ -847,7 +1242,7 @@ Widget _buildProfileTab(
                             content: const Text("¿Estás seguro de que deseas cerrar sesión en Marketplace UA?"),
                             actions: [
                               TextButton(
-                                onPressed: () => Navigator.of(context).pop(), // Solo cierra la nube
+                                onPressed: () => Navigator.of(context).pop(),
                                 child: const Text("CANCELAR", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
                               ),
                               ElevatedButton(
@@ -858,7 +1253,7 @@ Widget _buildProfileTab(
                                     Navigator.pushAndRemoveUntil(
                                       context,
                                       MaterialPageRoute(builder: (context) => const LoginScreen()),
-                                      (route) => false, // Elimina el historial de navegación para que no puedan volver atrás
+                                      (route) => false,
                                     );
                                   }
                                 },
@@ -883,6 +1278,9 @@ Widget _buildProfileTab(
     );
   }
 
+  /// Gestión de Seguridad: 
+  /// Implemento el cambio de credenciales requiriendo re-autenticación (pattern de Firebase) 
+  /// para asegurar que el usuario que intenta el cambio es el dueño de la sesión actual.
   Future<void> _showChangePasswordDialog() async {
     final formKey = GlobalKey<FormState>();
     final currentPasswordController = TextEditingController();

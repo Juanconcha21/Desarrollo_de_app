@@ -1,20 +1,20 @@
 {
   "project_info": {
-    "project_number": "869458511378",
-    "project_id": "market1-86af5",
-    "storage_bucket": "market1-86af5.firebasestorage.app"
+    "project_number": "20721463887",
+    "project_id": "marketuafinal",
+    "storage_bucket": "marketuafinal.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:869458511378:android:897e5d9408fe29fd3dbacb",
+        "mobilesdk_app_id": "1:20721463887:android:5b995178a53c3d3f2cf03a",
         "android_client_info": {
           "package_name": "com.example.market1"
         }
       },
       "oauth_client": [
         {
-          "client_id": "869458511378-j8q9ckd3hem278j0use4ll4ns3ipbpb3.apps.googleusercontent.com",
+          "client_id": "20721463887-kd8r4e2k0ffutlg3i4hi362l2rg8ovsb.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
             "package_name": "com.example.market1",
@@ -22,24 +22,24 @@
           }
         },
         {
-          "client_id": "869458511378-939ars84kr4t0okuj4iarp68qq92h9ld.apps.googleusercontent.com",
+          "client_id": "20721463887-85acee349eqdre74uvgrtrnhmujgdoub.apps.googleusercontent.com",
           "client_type": 3
         }
       ],
       "api_key": [
         {
-          "current_key": "AIzaSyDuu2YO7QEjWsdKfWGrrsWeD5nxXB-V2xI"
+          "current_key": "AIzaSyB5Md_8NCBuKDUamwa9RAnp29tXr-Spb8w"
         }
       ],
       "services": {
         "appinvite_service": {
           "other_platform_oauth_client": [
             {
-              "client_id": "869458511378-939ars84kr4t0okuj4iarp68qq92h9ld.apps.googleusercontent.com",
+              "client_id": "20721463887-85acee349eqdre74uvgrtrnhmujgdoub.apps.googleusercontent.com",
               "client_type": 3
             },
             {
-              "client_id": "869458511378-7lh0mrivpsp7ds44g3bdvr3d1l4b6ndi.apps.googleusercontent.com",
+              "client_id": "20721463887-3m71thvd3nn60sj13cildqspntqvtv1t.apps.googleusercontent.com",
               "client_type": 2,
               "ios_info": {
                 "bundle_id": "com.example.market1"

@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+/// Módulo de Edición de Productos:
+/// Esta pantalla recibe un DocumentSnapshot para hidratar un formulario de edición,
+/// permitiendo la actualización de metadata del producto en Firestore.
 class EditActualProductScreen extends StatefulWidget {
   final DocumentSnapshot product;
 
@@ -26,6 +29,7 @@ class _EditActualProductScreenState extends State<EditActualProductScreen> {
   @override
   void initState() {
     super.initState();
+    // Deserializo el snapshot para inicializar los controladores de texto y estados de los dropdowns.
     Map<String, dynamic> data = widget.product.data() as Map<String, dynamic>;
     titleController = TextEditingController(text: data['title']);
     priceController = TextEditingController(text: data['price']);
@@ -35,6 +39,8 @@ class _EditActualProductScreenState extends State<EditActualProductScreen> {
     selectedCategory = data['category'] ?? 'Otros'; 
   }
 
+  /// Lógica de persistencia:
+  /// Realizo una actualización parcial (update) del documento referenciado en Firestore.
   Future<void> _updateProduct() async {
     setState(() => isLoading = true);
     try {
@@ -104,6 +110,8 @@ class _EditActualProductScreenState extends State<EditActualProductScreen> {
       ),
     );
   }
+
+  // Componentes de UI reutilizables para mantener la consistencia del diseño.
   Widget _buildInput(TextEditingController controller, String label, IconData icon, {bool isNumber = false, int maxLines = 1}) {
     return TextField(
       controller: controller,

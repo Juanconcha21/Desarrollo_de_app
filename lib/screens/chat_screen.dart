@@ -1,17 +1,27 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:ui';
+import 'product_detail_cloud.dart';
 
+/// Pantalla de Chat:
+/// Implemento un sistema de mensajería bidireccional apoyado en sub-colecciones de Firestore.
 class ChatScreen extends StatefulWidget {
   final String chatId;
   final String otherUserId;
   final String otherUserName;
+  final String? productId; // Nuevo: ID del producto asociado al chat
+  final String? productTitle; // Nuevo: Título del producto
+  final String? productImageUrl; // Nuevo: URL de la imagen del producto
 
   const ChatScreen({
     super.key,
     required this.chatId,
     required this.otherUserId,
     required this.otherUserName,
+    this.productId,
+    this.productTitle,
+    this.productImageUrl,
   });
 
   @override
@@ -22,22 +32,28 @@ class _ChatScreenState extends State<ChatScreen> {
   final currentUser = FirebaseAuth.instance.currentUser;
   final TextEditingController _msgController = TextEditingController();
 
+  /// Orquestación del envío de mensajes:
+  /// Realizo una operación de escritura doble: una inserción atómica en la sub-colección 'messages'
+  /// y una actualización (merge) en el documento raíz del chat para mantener el 'lastMessage'.
   void _sendMessage() async {
     final text = _msgController.text.trim();
     if (text.isEmpty) return;
 
     _msgController.clear();
 
+    final userDoc = await FirebaseFirestore.instance.collection('users').doc(currentUser!.uid).get();
+    final senderFullName = userDoc.exists ? (userDoc.data()?['fullName'] ?? 'Usuario') : 'Usuario';
+
     final chatRef = FirebaseFirestore.instance.collection('chats').doc(widget.chatId);
     
-    // Añadir mensaje a la subcolección de Firebase
     await chatRef.collection('messages').add({
       'text': text,
       'senderId': currentUser!.uid,
+      'senderName': senderFullName,
+      'receiverId': widget.otherUserId,
       'timestamp': FieldValue.serverTimestamp(),
     });
 
-    // Actualizar el estado del último mensaje en la bandeja general
     await chatRef.set({
       'lastMessage': text,
       'lastMessageTime': FieldValue.serverTimestamp(),
@@ -54,6 +70,7 @@ class _ChatScreenState extends State<ChatScreen> {
       appBar: AppBar(
         title: Row(
           children: [
+            // Componente visual para la identidad del interlocutor.
             const CircleAvatar(
               radius: 18,
               backgroundColor: Colors.white24,
@@ -71,7 +88,12 @@ class _ChatScreenState extends State<ChatScreen> {
       body: SafeArea(
         child: Column(
           children: [
+            if (widget.productId != null && widget.productTitle != null)
+              _buildProductBanner(), // Muestra el banner del producto si está disponible
+
             Expanded(
+              /// Flujo reactivo de mensajes:
+              /// Utilizo un StreamBuilder para escuchar cambios en tiempo real, ordenando por timestamp descendente.
               child: StreamBuilder<QuerySnapshot>(
                 stream: FirebaseFirestore.instance
                     .collection('chats')
@@ -85,6 +107,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
                   final messages = snapshot.data?.docs ?? [];
 
+                  // Estado vacío: feedback visual para el usuario cuando no hay historial.
                   if (messages.isEmpty) {
                     return Center(
                       child: Column(
@@ -99,14 +122,15 @@ class _ChatScreenState extends State<ChatScreen> {
                   }
 
                   return ListView.builder(
-                    reverse: true, // Permite que los mensajes recientes salgan desde abajo
+                    // Invierto el orden del ListView para que los mensajes nuevos aparezcan desde el fondo (estilo estándar).
+                    reverse: true, 
                     padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 20),
                     itemCount: messages.length,
                     itemBuilder: (context, index) {
                       final msg = messages[index].data() as Map<String, dynamic>;
                       final isMe = msg['senderId'] == currentUser!.uid;
                       
-                      // Formatear la hora
+                      // Parseo y formateo de metadata temporal (Server Timestamps).
                       final Timestamp? timestamp = msg['timestamp'];
                       String timeText = '';
                       if (timestamp != null) {
@@ -121,7 +145,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         child: Container(
                           margin: const EdgeInsets.only(bottom: 8),
                           constraints: BoxConstraints(
-                            maxWidth: MediaQuery.of(context).size.width * 0.75, // Límite para que no desborde la pantalla
+                            maxWidth: MediaQuery.of(context).size.width * 0.75,
                           ),
                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                           decoration: BoxDecoration(
@@ -149,7 +173,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 },
               ),
             ),
-            // BARRA DE TEXTO (Protegida contra desbordes)
+            // Input bar: Gestión de entrada de texto y trigger de envío.
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
               decoration: BoxDecoration(
@@ -189,6 +213,107 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  // Nuevo widget para mostrar el banner del producto
+  Widget _buildProductBanner() {
+    return FutureBuilder<DocumentSnapshot>(
+      future: FirebaseFirestore.instance.collection('products').doc(widget.productId).get(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || !snapshot.data!.exists) return const SizedBox.shrink();
+        final productData = snapshot.data!.data() as Map<String, dynamic>;
+
+        return Container(
+          padding: const EdgeInsets.all(12),
+          margin: const EdgeInsets.fromLTRB(15, 10, 15, 10),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(15),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 5)),
+            ],
+          ),
+          child: Row(
+            children: [
+              if (widget.productImageUrl != null && widget.productImageUrl!.isNotEmpty)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.network(
+                    widget.productImageUrl!,
+                    width: 50,
+                    height: 50,
+                    fit: BoxFit.cover,
+                  ),
+                )
+              else
+                Container(
+                  width: 50,
+                  height: 50,
+                  decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(8)),
+                  child: const Icon(Icons.image_not_supported, color: Colors.grey),
+                ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.productTitle ?? 'Producto',
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black87),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      '\$${productData['price'] ?? '0'}',
+                      style: const TextStyle(color: Color(0xFFAF0303), fontWeight: FontWeight.bold, fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+              TextButton(
+                onPressed: () {
+                  showModalBottomSheet(
+                    context: context,
+                    isScrollControlled: true,
+                    backgroundColor: Colors.transparent,
+                    builder: (context) => BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                      child: DraggableScrollableSheet(
+                        initialChildSize: 0.8,
+                        minChildSize: 0.5,
+                        maxChildSize: 0.95,
+                        builder: (_, controller) => Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF1A1A1A) : Colors.white,
+                            borderRadius: const BorderRadius.vertical(top: Radius.circular(35)),
+                          ),
+                          child: SingleChildScrollView(
+                            controller: controller,
+                            child: ProductDetailCloud(
+                              productData: productData,
+                              productId: widget.productId!,
+                              isDarkMode: Theme.of(context).brightness == Brightness.dark,
+                              userRole: 'usuario',
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+                style: TextButton.styleFrom(
+                  backgroundColor: Colors.grey.shade100,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                child: const Text("Ver producto", style: TextStyle(color: Colors.black87, fontWeight: FontWeight.bold, fontSize: 12)),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

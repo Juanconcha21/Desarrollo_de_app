@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/auth_service.dart';
-import 'home_screen.dart';
+import 'package:market1/screens/home_screen.dart';
+import 'verify_email_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -25,6 +26,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final nameController = TextEditingController();
   final careerController = TextEditingController();
   final dobController = TextEditingController();
+  String selectedRole = 'usuario'; // Rol por defecto
 
   @override
   void initState() {
@@ -33,29 +35,45 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   // =================================================================
-  // 1. INICIO DE SESIÓN CON GOOGLE (CON BARRERA DE SEGURIDAD 2FA)
+  // 1. INICIO DE SESIÓN CON GOOGLE 
   // =================================================================
   Future<void> _handleGoogleSignIn() async {
 
     setState(() => isLoading = true);
     try {
-      User? user = await auth.signInWithGoogle();
-      if (user != null) {
-         bool passedSecurity = await _showPatternValidationDialog();
-        if (!passedSecurity) {
-          await auth.signOut(); 
-          return;
-        }
-        
+      UserCredential? result = await auth.signInWithGoogle();
+      if (result != null && result.user != null) {
+        User user = result.user!;
+        bool isNewUser = result.additionalUserInfo?.isNewUser ?? false;
+
         // 1. REVISAMOS QUE SEA GMAIL
         if (user.email == null || !user.email!.toLowerCase().endsWith('@gmail.com')) {
           await FirebaseAuth.instance.signOut();
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text("Solo se permiten correos @gmail.com"), backgroundColor: Colors.red)
+              SnackBar(
+                content: const Row(
+                  children: [Icon(Icons.domain_disabled, color: Colors.white), SizedBox(width: 12), Text("Solo se permiten correos @gmail.com")],
+                ),
+                backgroundColor: Colors.redAccent,
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                margin: const EdgeInsets.all(20),
+              )
             );
           }
           return; 
+        }
+
+        // REVISAR VERIFICACIÓN (Si es nuevo, forzamos la pantalla de verificación)
+        if (isNewUser || !user.emailVerified) {
+          if (mounted) {
+            Navigator.pushReplacement(
+              context, 
+              MaterialPageRoute(builder: (_) => const VerifyEmailScreen())
+            );
+          }
+          return;
         }
 
         // 2. COMPLETAR PERFIL
@@ -67,13 +85,23 @@ class _LoginScreenState extends State<LoginScreen> {
           }
         }
         
-        // 3. NAVEGAMOS MANUALMENTE (después del patrón)
+        // 3. NAVEGAMOS AL HOME
         if (mounted) {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomeScreen()));
+          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => HomeScreen()));
         }
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: Colors.red));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [const Icon(Icons.error_outline, color: Colors.white), const SizedBox(width: 12), Expanded(child: Text(e.toString()))],
+          ),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          margin: const EdgeInsets.all(20),
+        )
+      );
     } finally {
       if (mounted) setState(() => isLoading = false);
     }
@@ -85,20 +113,23 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _handleAuth() async {
     if (!_formKey.currentState!.validate()) return;
 
-    // ==========================================
-    // 🚨 BARRERA: VALIDACIÓN HÍBRIDA (LOGIN MANUAL CON CORREO) 🚨
-    // ==========================================
-    bool passedSecurity = await _showPatternValidationDialog();
-    if (!passedSecurity) return;
-    // ==========================================
-
     setState(() => isLoading = true);
     try {
       if (isLogin) {
-        await auth.login(emailController.text.trim(), passwordController.text.trim());
-        // NAVEGAMOS MANUALMENTE
-        if (mounted) {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomeScreen()));
+        User? user = await auth.login(emailController.text.trim(), passwordController.text.trim());
+        if (user != null) {
+          if (!user.emailVerified) {
+            if (mounted) {
+              Navigator.pushReplacement(
+                context, 
+                MaterialPageRoute(builder: (_) => const VerifyEmailScreen())
+              );
+            }
+          } else {
+            if (mounted) {
+              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomeScreen()));
+            }
+          }
         }
       } else {
         await auth.register(
@@ -107,18 +138,44 @@ class _LoginScreenState extends State<LoginScreen> {
           nameController.text.trim(),
           careerController.text.trim(),
           dobController.text.trim(),
+          selectedRole,
         );
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text("¡Registro exitoso! Revisa tu correo electrónico para verificar tu cuenta."),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 5),
-          ));
+          String successMsg = "¡Registro exitoso! Revisa tu correo para verificar tu cuenta.";
+          if (selectedRole == 'moderador') {
+            successMsg += " Además, un administrador debe aprobar tu acceso antes de que puedas entrar.";
+          }
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.mark_email_read, color: Colors.white),
+                  const SizedBox(width: 12),
+                  Expanded(child: Text(successMsg)),
+                ],
+              ),
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+              margin: const EdgeInsets.all(20),
+              duration: const Duration(seconds: 7),
+            )
+          );
           setState(() => isLogin = true); 
         }
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: Colors.red));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [const Icon(Icons.warning_amber_rounded, color: Colors.white), const SizedBox(width: 12), Expanded(child: Text(e.toString()))],
+          ),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          margin: const EdgeInsets.all(20),
+        )
+      );
     } finally {
       if (mounted) setState(() => isLoading = false);
     }
@@ -160,6 +217,20 @@ class _LoginScreenState extends State<LoginScreen> {
                       _buildTextField(nameController, "Nombre Completo", Icons.person),
                       _buildTextField(careerController, "Carrera", Icons.school_outlined),
                       _buildDateField(dobController, "Fecha de Nacimiento", Icons.cake, context), 
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 15),
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        decoration: BoxDecoration(color: Colors.white.withOpacity(0.95), borderRadius: BorderRadius.circular(30)),
+                        child: DropdownButtonFormField<String>(
+                          value: selectedRole,
+                          decoration: const InputDecoration(border: InputBorder.none, prefixIcon: Icon(Icons.badge, color: Color(0xFFAF0303))),
+                          items: const [
+                            DropdownMenuItem(value: 'usuario', child: Text("Quiero comprar/vender")),
+                            DropdownMenuItem(value: 'moderador', child: Text("Quiero ser Moderador")),
+                          ],
+                          onChanged: (val) => setState(() => selectedRole = val!),
+                        ),
+                      ),
                     ],
                     
                     _buildTextField(
@@ -418,12 +489,12 @@ class _LoginScreenState extends State<LoginScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text("Ingresa tu correo institucional y te enviaremos un enlace para restablecer tu clave."),
+            const Text("Ingresa tu correo @gmail.com y te enviaremos un enlace para restablecer tu clave."),
             const SizedBox(height: 15),
             TextField(
               controller: resetEmailController,
               decoration: InputDecoration(
-                hintText: "correo@ejemplo.cl",
+                hintText: "usuario@gmail.com",
                 prefixIcon: const Icon(Icons.email, color: Color(0xFFAF0303)),
                 filled: true,
                 fillColor: Colors.grey.shade100,
@@ -445,7 +516,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 if (mounted) {
                   Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                    content: Text("Enlace enviado. Revisa tu correo institucional."),
+                    content: Text("Enlace enviado. Revisa tu bandeja de entrada."),
                     backgroundColor: Colors.green,
                   ));
                 }
@@ -481,214 +552,4 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  // =================================================================
-  // 5. VENTANA DEL DOBLE FACTOR DE AUTENTICACIÓN (2FA SIMULADO)
-  // =================================================================
-  Future<bool> _showInstitutionalValidationDialog() async {
-    final instEmailController = TextEditingController();
-    final codeController = TextEditingController();
-    
-    bool isVerified = false;
-    bool codeSent = false; 
-
-    await showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return StatefulBuilder( 
-          builder: (context, setStateDialog) {
-            return AlertDialog(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-              title: Row(
-                children: [
-                  Icon(codeSent ? Icons.mark_email_read : Icons.school, color: const Color(0xFFAF0303)),
-                  const SizedBox(width: 10),
-                  Text(codeSent ? "Ingresa el Código" : "Verificación UA", style: const TextStyle(color: Color(0xFFAF0303), fontWeight: FontWeight.bold, fontSize: 18)),
-                ],
-              ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (!codeSent) ...[
-                    const Text("Para confirmar que eres alumno, escribe tu correo institucional de la universidad."),
-                    const SizedBox(height: 15),
-                    TextField(
-                      controller: instEmailController,
-                      keyboardType: TextInputType.emailAddress,
-                      decoration: InputDecoration(
-                        hintText: "ejemplo@uautonoma.cl",
-                        prefixIcon: const Icon(Icons.alternate_email, color: Color(0xFFAF0303)),
-                        filled: true,
-                        fillColor: Colors.grey.shade100,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
-                      ),
-                    ),
-                  ] else ...[
-                    Text("Hemos enviado un código de seguridad a:\n${instEmailController.text}", textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 10),
-                    const Text("Por favor, ingrésalo a continuación:", textAlign: TextAlign.center),
-                    const SizedBox(height: 15),
-                    TextField(
-                      controller: codeController,
-                      keyboardType: TextInputType.number,
-                      textAlign: TextAlign.center,
-                      maxLength: 6,
-                      decoration: InputDecoration(
-                        hintText: "123456",
-                        filled: true,
-                        fillColor: Colors.grey.shade100,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
-                      ),
-                    ),
-                  ]
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context), 
-                  child: const Text("CANCELAR", style: TextStyle(color: Colors.grey)),
-                ),
-                ElevatedButton(
-                  onPressed: () async {
-                    if (!codeSent) {
-                      String input = instEmailController.text.trim().toLowerCase();
-                      if (input.endsWith("@uautonoma.cl") || input.endsWith("@cloud.uautonoma.cl")) {
-                        setStateDialog(() => codeSent = true); 
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Debes ingresar un correo válido de la UA"), backgroundColor: Colors.red));
-                      }
-                    } else {
-                      if (codeController.text.trim() == "123456") {
-                        isVerified = true;
-                        Navigator.pop(context); 
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Código incorrecto"), backgroundColor: Colors.red));
-                      }
-                    }
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFAF0303),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
-                  ),
-                  child: Text(codeSent ? "VERIFICAR" : "ENVIAR CÓDIGO", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                ),
-              ],
-            );
-          }
-        );
-      },
-    );
-    return isVerified;
-  }
-
-  // =================================================================
-  // 6. VENTANA DE VALIDACIÓN HÍBRIDA POR PATRÓN (MAQUETA)
-  // =================================================================
-  Future<bool> _showPatternValidationDialog() async {
-    List<int> currentPattern = [];
-
-    bool? result = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setStateDialog) {
-            return AlertDialog(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-              title: const Row(
-                children: [
-                  Icon(Icons.apps, color: Color(0xFFAF0303)),
-                  SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      "Validación Híbrida", 
-                      style: TextStyle(color: Color(0xFFAF0303), fontWeight: FontWeight.bold, fontSize: 18),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    "Dibuja tu patrón de seguridad para continuar.\n(Maqueta: presiona 1-2-3-4-5-6)", 
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 20),
-                  SizedBox(
-                    height: 220,
-                    width: 220,
-                    child: GridView.builder(
-                      physics: const NeverScrollableScrollPhysics(),
-                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 3,
-                        crossAxisSpacing: 15,
-                        mainAxisSpacing: 15,
-                      ),
-                      itemCount: 9,
-                      itemBuilder: (context, index) {
-                        int dotNumber = index + 1;
-                        bool isSelected = currentPattern.contains(dotNumber);
-                        return GestureDetector(
-                          onTap: () {
-                            setStateDialog(() {
-                              if (!isSelected) {
-                                currentPattern.add(dotNumber);
-                                if (currentPattern.join() == "123456") {
-                                  Navigator.pop(context, true); // Devuelve verdadero de forma explícita
-                                } else if (currentPattern.length >= 6) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text("Patrón incorrecto, intenta de nuevo"), backgroundColor: Colors.red),
-                                  );
-                                  currentPattern.clear();
-                                }
-                              }
-                            });
-                          },
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: isSelected ? const Color(0xFFAF0303) : Colors.grey.shade200,
-                              shape: BoxShape.circle,
-                              boxShadow: isSelected ? [BoxShadow(color: const Color(0xFFAF0303).withOpacity(0.4), blurRadius: 6, spreadRadius: 2)] : [],
-                            ),
-                            child: Center(
-                              child: Text(
-                                "$dotNumber",
-                                style: TextStyle(
-                                  color: isSelected ? Colors.white : Colors.black54,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 18,
-                                ),
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextButton(
-                    onPressed: () {
-                      setStateDialog(() {
-                        currentPattern.clear();
-                      });
-                    },
-                    child: const Text("Limpiar Patrón", style: TextStyle(color: Colors.grey)),
-                  )
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text("CANCELAR", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-    return result ?? false;
-  }
 }
