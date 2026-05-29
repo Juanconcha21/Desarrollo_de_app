@@ -23,8 +23,8 @@ class _EditActualProductScreenState extends State<EditActualProductScreen> {
   
   bool isLoading = false;
 
-  final List<String> sedes = ['Sede Talca', 'Sede Temuco', 'Sede Santiago'];
-  final List<String> categories = ['Electrodomésticos', 'Tecnología', 'Muebles', 'Hogar', 'Ropa y Accesorios', 'Otros'];
+  List<String> sedes = ['Sede Talca', 'Sede Temuco', 'Sede Santiago'];
+  List<String> categories = ['Electrodomésticos', 'Tecnología', 'Muebles', 'Hogar', 'Ropa y Accesorios', 'Otros'];
 
   @override
   void initState() {
@@ -37,6 +37,40 @@ class _EditActualProductScreenState extends State<EditActualProductScreen> {
     
     selectedSede = data['universitySede'] ?? 'Sede Talca';
     selectedCategory = data['category'] ?? 'Otros'; 
+    _loadDynamicData();
+  }
+
+  /// Carga sedes y categorías desde Firestore para mantener la consistencia con el Admin
+  Future<void> _loadDynamicData() async {
+    try {
+      // Cargar Categorías
+      var catSnapshot = await FirebaseFirestore.instance.collection('categories').get();
+      if (catSnapshot.docs.isNotEmpty) {
+        setState(() {
+          for (var doc in catSnapshot.docs) {
+            final name = doc['name'] as String;
+            if (!categories.contains(name)) categories.add(name);
+          }
+          if (categories.contains('Otros')) {
+            categories.remove('Otros');
+            categories.add('Otros');
+          }
+        });
+      }
+
+      // Cargar Sedes
+      var sedeSnapshot = await FirebaseFirestore.instance.collection('universitySedes').get();
+      if (sedeSnapshot.docs.isNotEmpty) {
+        setState(() {
+          for (var doc in sedeSnapshot.docs) {
+            final name = doc['name'] as String;
+            if (!sedes.contains(name)) sedes.add(name);
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint("Error cargando configuración dinámica: $e");
+    }
   }
 
   /// Lógica de persistencia:
