@@ -302,24 +302,24 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// Mapeo automático de estilos. 
+  /// Si el Admin añade "Tecnología de punta", el sistema detecta "tecno" y pone el icono de PC.
+  Map<String, dynamic> _getCategoryStyle(String title) {
+    final name = title.toLowerCase();
+    if (name.contains('electro')) return {'icon': Icons.kitchen, 'color': Colors.blueGrey};
+    if (name.contains('tecno') || name.contains('comput')) return {'icon': Icons.computer, 'color': Colors.blue};
+    if (name.contains('mueble')) return {'icon': Icons.chair, 'color': Colors.brown};
+    if (name.contains('hogar') || name.contains('casa')) return {'icon': Icons.home, 'color': Colors.green};
+    if (name.contains('ropa') || name.contains('moda')) return {'icon': Icons.checkroom, 'color': Colors.red};
+    if (name.contains('libro') || name.contains('estudio')) return {'icon': Icons.menu_book_rounded, 'color': Colors.orange};
+    if (name.contains('deporte')) return {'icon': Icons.sports_soccer_rounded, 'color': Colors.indigo};
+    
+    return {'icon': Icons.category_rounded, 'color': Colors.teal}; // Icono por defecto
+  }
+
   /// Módulo de Categorías: Estructura de navegación basada en cuadrícula (GridView).
   Widget _buildCategoriesTab(Color surfaceColor, Color textColor) {
-    final List<Map<String, dynamic>> gridCategories = [
-      {
-        'title': 'Electrodomésticos',
-        'icon': Icons.kitchen,
-        'color': Colors.blueGrey,
-      },
-      {'title': 'Tecnología', 'icon': Icons.computer, 'color': Colors.blue},
-      {'title': 'Muebles', 'icon': Icons.chair, 'color': Colors.brown},
-      {'title': 'Hogar', 'icon': Icons.home, 'color': Colors.green},
-      {
-        'title': 'Ropa y Accesorios',
-        'icon': Icons.checkroom,
-        'color': Colors.red,
-      },
-      {'title': 'Otros', 'icon': Icons.category, 'color': Colors.teal},
-    ];
+    final categoriesStream = FirebaseFirestore.instance.collection('categories').snapshots();
 
     return SafeArea(
       child: Column(
@@ -338,69 +338,67 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           Expanded(
-            child: GridView.builder(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                childAspectRatio: 1.1,
-                crossAxisSpacing: 15,
-                mainAxisSpacing: 15,
-              ),
-              itemCount: gridCategories.length,
-              itemBuilder: (context, index) {
-                return GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      selectedFilterCategory = gridCategories[index]['title'];
-                      _selectedIndex = 1;
-                    });
-                  },
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: surfaceColor,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(
-                            isDarkMode ? 0.3 : 0.03,
-                          ),
-                          blurRadius: 10,
-                          offset: const Offset(0, 5),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(15),
-                          decoration: BoxDecoration(
-                            color: gridCategories[index]['color'].withOpacity(
-                              isDarkMode ? 0.2 : 0.1,
-                            ),
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(
-                            gridCategories[index]['icon'],
-                            color: gridCategories[index]['color'],
-                            size: 30,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        Text(
-                          gridCategories[index]['title'],
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                            color: textColor,
-                          ),
-                        ),
-                      ],
-                    ),
+            child: StreamBuilder<QuerySnapshot>(
+              stream: categoriesStream,
+              builder: (context, snapshot) {
+                // Iniciamos con las categorías por defecto
+                final List<String> categoryTitles = ['Electrodomésticos', 'Tecnología', 'Muebles', 'Hogar', 'Ropa y Accesorios', 'Otros'];
+                
+                if (snapshot.hasData) {
+                  for (var doc in snapshot.data!.docs) {
+                    final String name = doc['name'] as String;
+                    // Solo añadimos si no existe ya en la lista para evitar duplicados
+                    if (!categoryTitles.contains(name)) categoryTitles.add(name);
+                  }
+                }
+
+                // Aseguramos que 'Otros' siempre quede al final de la lista
+                if (categoryTitles.contains('Otros')) {
+                  categoryTitles.remove('Otros');
+                  categoryTitles.add('Otros');
+                }
+
+                return GridView.builder(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    childAspectRatio: 1.1,
+                    crossAxisSpacing: 15,
+                    mainAxisSpacing: 15,
                   ),
+                  itemCount: categoryTitles.length,
+                  itemBuilder: (context, index) {
+                    final title = categoryTitles[index];
+                    final style = _getCategoryStyle(title);
+
+                    return GestureDetector(
+                      onTap: () => setState(() { selectedFilterCategory = title; _selectedIndex = 1; }),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: surfaceColor,
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [BoxShadow(color: Colors.black.withOpacity(isDarkMode ? 0.3 : 0.03), blurRadius: 10, offset: const Offset(0, 5))],
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(15),
+                              decoration: BoxDecoration(
+                                color: (style['color'] as Color).withOpacity(isDarkMode ? 0.2 : 0.1),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(style['icon'] as IconData, color: style['color'] as Color, size: 30),
+                            ),
+                            const SizedBox(height: 10),
+                            Text(title, textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: textColor)),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
                 );
-              },
+              }
             ),
           ),
         ],

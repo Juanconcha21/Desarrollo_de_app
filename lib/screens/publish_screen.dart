@@ -22,9 +22,39 @@ class _PublishScreenState extends State<PublishScreen> {
   final priceController = TextEditingController();
   final descriptionController = TextEditingController();
 
-  // Domain-specific data para el catálogo.
   String selectedCategory = 'Tecnología';
-  final List<String> categories = ['Electrodomésticos', 'Tecnología', 'Muebles', 'Hogar', 'Ropa y Accesorios', 'Otros'];
+  List<String> categories = ['Electrodomésticos', 'Tecnología', 'Muebles', 'Hogar', 'Ropa y Accesorios', 'Otros'];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCategories();
+  }
+
+  /// Carga las categorías dinámicamente desde Firestore para que coincidan con el Admin
+  Future<void> _loadCategories() async {
+    try {
+      var snapshot = await FirebaseFirestore.instance.collection('categories').get();
+      if (snapshot.docs.isNotEmpty && mounted) {
+        setState(() {
+          for (var doc in snapshot.docs) {
+            final name = doc['name'] as String;
+            if (!categories.contains(name)) categories.add(name);
+          }
+
+          // Mantenemos la jerarquía visual enviando 'Otros' al final
+          if (categories.contains('Otros')) {
+            categories.remove('Otros');
+            categories.add('Otros');
+          }
+          
+          if (!categories.contains(selectedCategory)) selectedCategory = categories.first;
+        });
+      }
+    } catch (e) {
+      debugPrint("Error al sincronizar categorías: $e");
+    }
+  }
 
   LatLng? _pickedLocation;
   File? _image;
